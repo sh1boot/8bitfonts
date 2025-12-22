@@ -201,32 +201,37 @@ const Decoder<2,2> braille4(braille4_data);
 const Decoder<2,2> block4(block4_data);
 const Decoder<1,2> block2(block2_data);
 
-int main(void) {
-    std::ifstream mapping;
-    mapping.open("petscii.txt");
+int main(int argc, char** argv) {
     Glyph<8> glyph;
-    std::cout << std::endl;
+    std::ifstream mapping;
+    if (argc >= 2) {
+        mapping.open(argv[1]);
+    }
     while (fread(&glyph, sizeof(glyph), 1, stdin) == 1) {
         glyph.hflip();
         std::string metadata;
-        getline(mapping, metadata);
-        std::cout << metadata << std::endl;
+        if (mapping.is_open()) {
+            getline(mapping, metadata);
+            std::cout << metadata << std::endl;
+        } else {
+            std::cout << std::endl;
+        }
         std::string output;
         bool more = true;
         for (int row = 0; more == true; ++row) {
             output.clear();
             more = false;
-            more |= block.decode(output, glyph, row);
-            output += "  ";
             more |= braille.decode(output, glyph, row);
             output += "  ";
-            more |= block6.decode(output, glyph, row);
+            more |= block.decode(output, glyph, row);
             output += "  ";
             more |= braille6.decode(output, glyph, row);
             output += "  ";
-            more |= block4.decode(output, glyph, row);
+            more |= block6.decode(output, glyph, row);
             output += "  ";
             more |= braille4.decode(output, glyph, row);
+            output += "  ";
+            more |= block4.decode(output, glyph, row);
             output += "  ";
             more |= block2.decode(output, glyph, row);
             std::cout << output << std::endl;
