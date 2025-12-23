@@ -1,12 +1,12 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdint>
-#include <string>
-#include <vector>
 #include <fstream>
 #include <iostream>
 #include <iomanip>
-
+#include <map>
+#include <string>
+#include <vector>
 
 /*
 ░─░━░│░┃░┄░┅░┆░┇░┈░┉░┊░┋░┌░┍░┎░┏░┐░┑░┒░┓░└░┕░┖░┗░┘░┙░┚░┛░├░┝░┞░┟░░
@@ -46,22 +46,25 @@
 ░𜺠░𜺡░𜺢░𜺣░𜺤░𜺥░𜺦░𜺧░𜺨░𜺩░𜺪░𜺫░𜺬░𜺭░𜺮░𜺯░𜺰░𜺱░𜺲░𜺳░𜺺░𜺻░𜺼░𜺽░𜺾░𜺿░
 */
 
-template <size_t N = 8>
+
+using Codepoint = uint32_t;
+
 struct Glyph {
     static constexpr int kWidth = 8;
-    static constexpr int kHeight = N;
+    static constexpr int kHeight = 8;
+
     uint64_t bitmap(int row = 0) const {
         uint64_t r = 0;
         for (int i = 0; i < 64 / kWidth; ++i) {
             int j = i + row;
-            if (0 <= j && j < int(N)) {
+            if (0 <= j && j < kHeight) {
                 r |= uint64_t(blob_[j]) << (i * kWidth);
             }
         }
         return r;
     }
     void hflip() {
-        for (size_t i = 0; i < N; ++i) {
+        for (int i = 0; i < kHeight; ++i) {
             int x = blob_[i];
             x = ((x >> 1) & 0x5555555555555555) | ((x & 0x5555555555555555) << 1);
             x = ((x >> 2) & 0x3333333333333333) | ((x & 0x3333333333333333) << 2);
@@ -70,7 +73,7 @@ struct Glyph {
         }
     }
 
-    uint8_t blob_[N];
+    uint8_t blob_[kHeight];
 };
 
 struct DecoderBase {
@@ -99,16 +102,15 @@ struct Decoder : public DecoderBase {
         //           << context_width_ << "," << context_height_ << "  " << context_mask_ << std::endl;
     }
 
-    template <int GW>
     void decode(std::string& out, uint64_t bitmap) const {
-        for (int x = 0; x < GW; x += W) {
+        for (int x = 0; x < 8; x += W) {
             int j = 0;
             uint64_t mask = context_mask_;
             int shift = 0;
             for (int y = 0; y < context_height_; ++y) {
                 j |= (bitmap >> shift) & mask;
                 mask <<= context_width_;
-                shift += GW - context_width_;
+                shift += 8 - context_width_;
             }
             bitmap >>= W;
             assert(0 <= j && j < int(glyphs_.size()));
@@ -120,7 +122,7 @@ struct Decoder : public DecoderBase {
     }
 
     bool decode(std::string& out, auto const& glyph, int row = 0) const {
-        decode<glyph.kWidth>(out, glyph.bitmap(row * H));
+        decode(out, glyph.bitmap(row * H));
         return (row + 1) * H < glyph.kHeight;
     }
 
@@ -133,6 +135,41 @@ struct Decoder : public DecoderBase {
     int context_height_;
     uint64_t context_mask_;
     std::vector<char const*> glyphs_;
+};
+
+struct CharSetBase {
+    virtual void insert(Codepoint code, Glyph const& glyph, bool replace = true) = 0;
+    size_t count(Codepoint code) {
+        return chars_.count(code);
+    }
+    virtual int get_rows() = 0;
+
+    std::string_view get(Codepoint code) {
+        if (count(code) == 0) return chars_[' '];
+        return chars_[code];
+    }
+    auto begin() { return chars_.begin(); }
+    auto end() { return chars_.end(); }
+
+    std::map<Codepoint, std::string> chars_;
+};
+
+template <int W, int H>
+struct CharSet : public CharSetBase {
+    CharSet(Decoder<W, H> const& decoder) : decoder_(decoder) { }
+
+    void insert(Codepoint code, Glyph const& glyph, bool replace) override {
+        if (replace == false && chars_.count(code)) return;
+        std::string image;
+        for (int row = 0; decoder_.decode(image, glyph, row); ++row) {
+            image += "#\n";
+        }
+        image += "##\n";
+        chars_[code] = image;
+    }
+    int get_rows() override { return Glyph::kHeight / H; }
+
+    Decoder<W, H> const& decoder_;
 };
 
 
@@ -194,15 +231,33 @@ static constexpr char block2_data[] =
     "⠀▀▄█";
 
 const Decoder<2,4> braille(braille_data);
-const Decoder<2,4> block(block_data);
 const Decoder<2,3> braille6(braille6_data);
-const Decoder<2,3> block6(block6_data);
 const Decoder<2,2> braille4(braille4_data);
+const Decoder<2,4> block(block_data);
+const Decoder<2,3> block6(block6_data);
 const Decoder<2,2> block4(block4_data);
 const Decoder<1,2> block2(block2_data);
 
+CharSet<2,4> dots2x4(braille);
+CharSet<2,3> dots2x3(braille6);
+CharSet<2,2> dots2x2(braille4);
+CharSet<2,4> blocks2x4(block);
+CharSet<2,3> blocks2x3(block6);
+CharSet<2,2> blocks2x2(block4);
+CharSet<1,2> blocks1x2(block2);
+
 int main(int argc, char** argv) {
-    Glyph<8> glyph;
+    CharSetBase* sets[] = {
+        &dots2x4,
+        &dots2x3,
+        &dots2x2,
+        &blocks2x4,
+        &blocks2x3,
+        &blocks2x2,
+        &blocks1x2,
+    };
+    Glyph glyph;
+    int code = 32;
     std::ifstream mapping;
     if (argc >= 2) {
         mapping.open(argv[1]);
@@ -213,6 +268,11 @@ int main(int argc, char** argv) {
         if (mapping.is_open()) {
             getline(mapping, metadata);
             std::cout << metadata << std::endl;
+            if (metadata[0] == 'U' && metadata[1] == '+') {
+                code = strtoull(metadata.c_str() + 2, nullptr, 16);
+            } else {
+                code = 0;
+            }
         } else {
             std::cout << std::endl;
         }
@@ -235,6 +295,32 @@ int main(int argc, char** argv) {
             output += "  ";
             more |= block2.decode(output, glyph, row);
             std::cout << output << std::endl;
+        }
+        if (code > 0) {
+            for (auto set : sets) {
+                set->insert(code, glyph);
+            }
+        }
+        code++;
+    }
+    for (auto set : sets) {
+        std::cout << "tlf2a$ " << set->get_rows() << " " << set->get_rows() << " 40 15 0 0 0 0" << std::endl;
+        for (Codepoint code = 32; code < 128; ++code) {
+            std::cout << set->get(code);
+        }
+        std::cout << set->get(0x00C4);  // A umlaut
+        std::cout << set->get(0x00D6);  // O umlaut
+        std::cout << set->get(0x00DC);  // U umlaut
+        std::cout << set->get(0x00E4);  // a umlaut
+        std::cout << set->get(0x00F6);  // o umlaut
+        std::cout << set->get(0x00FC);  // u umlaut
+        std::cout << set->get(0x00DF);  // sharp s
+        for (auto it : *set) {
+            if (it.first < 128 || it.first == 0x00C4 || it.first == 0x00D6 || it.first == 0x00DC
+                 || it.first == 0x00E4 || it.first == 0x00F6 || it.first == 0x00FC || it.first == 0x00DF) {
+                continue;
+            }
+            std::cout << "0x" << std::hex << it.first << std::dec << "\n" << it.second;
         }
     }
     return 0;
