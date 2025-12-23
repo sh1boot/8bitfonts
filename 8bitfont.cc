@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <iomanip>
 #include <map>
@@ -52,30 +53,46 @@
 using Codepoint = uint32_t;
 
 struct Glyph {
-    static constexpr int kWidth = 8;
-    static constexpr int kHeight = 8;
+    static constexpr int kMaxWidth = 8;
+    static constexpr int kMaxHeight = 16;
 
-    uint64_t bitmap(int row = 0) const {
+    Glyph(int height = 8, int width = 8, bool hflip = true, int shift = 0)
+            : width_(width), height_(height), hflip_(hflip), shift_(shift) {
+        assert(width <= kMaxWidth);
+        assert(height <= kMaxHeight);
+    }
+    long read(FILE* file) {
+        long position = ftell(file);
+        if (fread(blob_, height_, 1, file) != 1) return -1;
+        if (hflip_) hflip();
+        return position;
+    }
+    template <size_t H>
+    uint64_t get_bitmap(int row = 0, int stride = 8) const {
         uint64_t r = 0;
-        for (int i = 0; i < 64 / kWidth; ++i) {
+        for (int i = 0, s = 0; i < H; ++i, s += stride) {
             int j = i + row;
-            if (0 <= j && j < kHeight) {
-                r |= uint64_t(blob_[j]) << (i * kWidth);
+            if (0 <= j && j < height_) {
+                r |= uint64_t(blob_[j]) << s;
             }
         }
         return r;
     }
     void hflip() {
-        for (int i = 0; i < kHeight; ++i) {
+        for (int i = 0; i < height_; ++i) {
             int x = blob_[i];
-            x = ((x >> 1) & 0x5555555555555555) | ((x & 0x5555555555555555) << 1);
-            x = ((x >> 2) & 0x3333333333333333) | ((x & 0x3333333333333333) << 2);
-            x = ((x >> 4) & 0x0f0f0f0f0f0f0f0f) | ((x & 0x0f0f0f0f0f0f0f0f) << 4);
-            blob_[i] = x;
+            x = ((x >> 1) & 0x55) | ((x & 0x55) << 1);
+            x = ((x >> 2) & 0x33) | ((x & 0x33) << 2);
+            x = ((x >> 4) & 0x0f) | ((x & 0x0f) << 4);
+            blob_[i] = x >> shift_;
         }
     }
 
-    uint8_t blob_[kHeight];
+    const int width_;
+    const int height_;
+    const bool hflip_;
+    const int shift_;
+    uint8_t blob_[kMaxHeight];
 };
 
 template <size_t W, size_t H>
@@ -98,8 +115,8 @@ struct Decoder {
         context_mask_ = ~(~uint64_t(1) << (context_width_ - 1));
     }
 
-    void decode(std::string& out, uint64_t bitmap) const {
-        for (int x = 0; x < 8; x += W) {
+    void decode(std::string& out, uint64_t bitmap, int width) const {
+        for (int x = 0; x < width; x += W) {
             int j = 0;
             uint64_t mask = context_mask_;
             int shift = 0;
@@ -118,8 +135,8 @@ struct Decoder {
     }
 
     bool decode(std::string& out, auto const& glyph, int row = 0) const {
-        decode(out, glyph.bitmap(row * H));
-        return (row + 1) * H < glyph.kHeight;
+        decode(out, glyph.template get_bitmap<H>(row * H), glyph.width_);
+        return (row + 1) * H < glyph.height_;
     }
 
     static bool is_ext_byte(uint8_t c) {
@@ -140,7 +157,7 @@ struct CharSetBase {
     size_t count(Codepoint code) {
         return chars_.count(code);
     }
-    virtual int get_rows() = 0;
+    virtual int get_rows(Glyph const& glyph) = 0;
 
     std::string_view get(Codepoint code) {
         if (count(code) == 0) return chars_[' '];
@@ -170,7 +187,7 @@ struct CharSet : public CharSetBase {
     bool decode(std::string& out, Glyph const& glyph, int row) const override {
         return decoder_.decode(out, glyph, row);
     }
-    int get_rows() override { return (Glyph::kHeight - 1) / H + 1; }
+    int get_rows(Glyph const& glyph) override { return (glyph.height_ - 1) / H + 1; }
 
     Decoder<W, H> const& decoder_;
 };
@@ -260,12 +277,41 @@ CharSetBase* allsets[] = {
 };
 
 int main(int argc, char** argv) {
-    std::string source = "c64";
-    Codepoint code = 32;
+    std::filesystem::path input = "c64.bin";
+    std::filesystem::path output;
+    std::filesystem::path mapfile;
+    int seek = 0, shift = 0;
+    int width = 8, height = 8;
+    bool view = false, flip = true;
+
     int opt;
-    while ((opt = getopt(argc, argv, "i:")) != -1) {
+    while ((opt = getopt(argc, argv, "vW:H:S:Mk:m:i:o:")) != -1) {
         switch (opt) {
-        case 'i': source = optarg;
+        case 'v':
+            view = true;
+            break;
+        case 'W':
+            width = atoi(optarg);
+            break;
+        case 'H':
+            height = atoi(optarg);
+            break;
+        case 'S':
+            shift = atoi(optarg);
+            break;
+        case 'M':
+            flip = !flip;
+            break;
+        case 'k':
+            seek = strtoul(optarg, nullptr, 0);
+        case 'm':
+            mapfile = optarg;
+            break;
+        case 'i':
+            input = optarg;
+            break;
+        case 'o':
+            output = optarg;
             break;
         default:
             std::cerr << "oops, bad command line argument." << std::endl;
@@ -273,18 +319,25 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::string filename = source + ".bin";
-    FILE* blob = fopen(filename.c_str(), "rb");
+    if (mapfile.empty()) {
+        mapfile = input;
+        mapfile.replace_extension(".map");
+    }
+    if (output.empty()) output = input.stem();
+    std::string base = output.filename();
+
+    FILE* blob = fopen(input.c_str(), "rb");
     if (blob == nullptr) {
-        perror(filename.c_str());
+        perror(input.c_str());
         exit(EXIT_FAILURE);
     }
-    filename = source + ".map";
-    FILE* map = fopen(filename.c_str(), "rt");
+    if (seek) fseek(blob, seek, SEEK_SET);
+    FILE* map = fopen(mapfile.c_str(), "rt");
 
-    Glyph glyph;
-    while (fread(&glyph, sizeof(glyph), 1, blob) == 1) {
-        glyph.hflip();
+    Glyph glyph(height, width, flip, shift);
+    Codepoint code = 32;
+    long position;
+    while ((position = glyph.read(blob)) >= 0) {
         if (map != nullptr) {
             char metadata[1024];
             fgets(metadata, sizeof(metadata), map);
@@ -294,53 +347,57 @@ int main(int argc, char** argv) {
                 code = 0;
             }
         }
-        if (code > 0) {
+        if (code > 0 && !view) {
             for (auto set : allsets) {
                 set->insert(code, glyph);
             }
         } else {
-            std::string output;
+            std::string dump;
             bool more = true;
             for (int row = 0; more == true; ++row) {
                 more = false;
                 for (auto set : allsets) {
-                    more |= set->decode(output, glyph, row);
-                    output += "  ";
+                    more |= set->decode(dump, glyph, row);
+                    dump += "  ";
                 }
-                if (more) output += '\n';
+                dump += '\n';
             }
-            std::cout << "No mapping for:\n" << output << std::endl;
+            std::cout << "unused @0x" << std::hex << position << std::dec << ":\n" << dump;
         }
         code++;
     }
-    for (auto set : allsets) {
-        filename = source + "_" + set->name_ + ".tlf";
-        FILE* font = fopen(filename.c_str(), "wt");
-        if (font == nullptr) {
-            perror(filename.c_str());
-            continue;
-        }
-        fprintf(font, "tlf2a$ %d %d 40 -1 1 0 0 0\n"
-                      "# %s %s generated by %s\n",
-                      set->get_rows(), set->get_rows(), source.c_str(), set->name_.c_str(), argv[0]);
-
-        for (Codepoint code = 32; code < 127; ++code) {
-            auto s = set->get(code);
-            fwrite(s.data(), 1, s.size(), font);
-        }
-        for (Codepoint code : { 0x00C4, 0x00D6, 0x00DC, 0x00E4, 0x00F6, 0x00FC, 0x00DF, }) {
-            auto s = set->get(code);
-            fwrite(s.data(), 1, s.size(), font);
-        }
-
-        for (auto it : *set) {
-            if (it.first < 127 || it.first == 0x00C4 || it.first == 0x00D6 || it.first == 0x00DC
-                 || it.first == 0x00E4 || it.first == 0x00F6 || it.first == 0x00FC || it.first == 0x00DF) {
+    if (!view) {
+        for (auto set : allsets) {
+            auto filename = output;
+            filename.replace_filename(std::string(output.filename()) + "_" + set->name_);
+            filename.replace_extension(".tlf");
+            FILE* font = fopen(filename.c_str(), "wt");
+            if (font == nullptr) {
+                perror(filename.c_str());
                 continue;
             }
-            fprintf(font, "0x%06x\n%.*s", it.first, int(it.second.size()), it.second.data());
+            fprintf(font, "tlf2a$ %d %d 40 -1 1 0 0 0\n"
+                          "# %s %s generated by %s\n",
+                          set->get_rows(glyph), set->get_rows(glyph), base.c_str(), set->name_.c_str(), argv[0]);
+
+            for (Codepoint code = 32; code < 127; ++code) {
+                auto s = set->get(code);
+                fwrite(s.data(), 1, s.size(), font);
+            }
+            for (Codepoint code : { 0x00C4, 0x00D6, 0x00DC, 0x00E4, 0x00F6, 0x00FC, 0x00DF, }) {
+                auto s = set->get(code);
+                fwrite(s.data(), 1, s.size(), font);
+            }
+
+            for (auto it : *set) {
+                if (it.first < 127 || it.first == 0x00C4 || it.first == 0x00D6 || it.first == 0x00DC
+                     || it.first == 0x00E4 || it.first == 0x00F6 || it.first == 0x00FC || it.first == 0x00DF) {
+                    continue;
+                }
+                fprintf(font, "0x%06x\n%.*s", it.first, int(it.second.size()), it.second.data());
+            }
+            fclose(font);
         }
-        fclose(font);
     }
     if (blob != nullptr) fclose(blob);
     if (map != nullptr) fclose(map);

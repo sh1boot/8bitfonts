@@ -1,0 +1,6 @@
+[submodule "romfont"]
+	path = romfont
+	url = https://github.com/spacerace/romfont.git
+[submodule "8x8-fonts"]
+	path = 8x8-fonts
+	url = https://github.com/ivop/8x8-fonts.git
