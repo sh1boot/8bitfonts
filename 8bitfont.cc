@@ -1,7 +1,9 @@
+#include <unistd.h>
+
 #include <cassert>
 #include <cstdio>
 #include <cstdint>
-#include <fstream>
+#include <cstdlib>
 #include <iostream>
 #include <iomanip>
 #include <map>
@@ -98,8 +100,6 @@ struct Decoder : public DecoderBase {
             context_size = context_width_ * context_height_;
         } while ((glyphs_.size() >> context_size) > 1);
         context_mask_ = ~(~uint64_t(1) << (context_width_ - 1));
-        // std::cout << glyphs_.size() << " " << W << "x" << H << "  "
-        //           << context_width_ << "," << context_height_ << "  " << context_mask_ << std::endl;
     }
 
     void decode(std::string& out, uint64_t bitmap) const {
@@ -139,6 +139,8 @@ struct Decoder : public DecoderBase {
 
 struct CharSetBase {
     virtual void insert(Codepoint code, Glyph const& glyph, bool replace = true) = 0;
+    virtual bool decode(std::string& out, Glyph const& glyph, int row) const = 0;
+    CharSetBase(std::string_view name) : name_(name) {}
     size_t count(Codepoint code) {
         return chars_.count(code);
     }
@@ -151,12 +153,14 @@ struct CharSetBase {
     auto begin() { return chars_.begin(); }
     auto end() { return chars_.end(); }
 
+    std::string const name_;
     std::map<Codepoint, std::string> chars_;
 };
 
 template <int W, int H>
 struct CharSet : public CharSetBase {
-    CharSet(Decoder<W, H> const& decoder) : decoder_(decoder) { }
+    CharSet(std::string_view name, Decoder<W, H> const& decoder)
+        : CharSetBase(name), decoder_(decoder) { }
 
     void insert(Codepoint code, Glyph const& glyph, bool replace) override {
         if (replace == false && chars_.count(code)) return;
@@ -167,7 +171,10 @@ struct CharSet : public CharSetBase {
         image += "##\n";
         chars_[code] = image;
     }
-    int get_rows() override { return Glyph::kHeight / H; }
+    bool decode(std::string& out, Glyph const& glyph, int row) const override {
+        return decoder_.decode(out, glyph, row);
+    }
+    int get_rows() override { return (Glyph::kHeight - 1) / H + 1; }
 
     Decoder<W, H> const& decoder_;
 };
@@ -238,90 +245,108 @@ const Decoder<2,3> block6(block6_data);
 const Decoder<2,2> block4(block4_data);
 const Decoder<1,2> block2(block2_data);
 
-CharSet<2,4> dots2x4(braille);
-CharSet<2,3> dots2x3(braille6);
-CharSet<2,2> dots2x2(braille4);
-CharSet<2,4> blocks2x4(block);
-CharSet<2,3> blocks2x3(block6);
-CharSet<2,2> blocks2x2(block4);
-CharSet<1,2> blocks1x2(block2);
+CharSet<2,4> dots2x4("2x4dot", braille);
+CharSet<2,3> dots2x3("2x3dot", braille6);
+CharSet<2,2> dots2x2("2x2dot", braille4);
+CharSet<2,4> blocks2x4("2x4block", block);
+CharSet<2,3> blocks2x3("2x3block", block6);
+CharSet<2,2> blocks2x2("2x2block", block4);
+CharSet<1,2> blocks1x2("1x2block", block2);
+
+CharSetBase* allsets[] = {
+    &dots2x4,
+    &dots2x3,
+    &dots2x2,
+    &blocks2x4,
+    &blocks2x3,
+    &blocks2x2,
+    &blocks1x2,
+};
 
 int main(int argc, char** argv) {
-    CharSetBase* sets[] = {
-        &dots2x4,
-        &dots2x3,
-        &dots2x2,
-        &blocks2x4,
-        &blocks2x3,
-        &blocks2x2,
-        &blocks1x2,
-    };
-    Glyph glyph;
-    int code = 32;
-    std::ifstream mapping;
-    if (argc >= 2) {
-        mapping.open(argv[1]);
+    std::string source = "c64";
+    Codepoint code = 32;
+    int opt;
+    while ((opt = getopt(argc, argv, "i:")) != -1) {
+        switch (opt) {
+        case 'i': source = optarg;
+            break;
+        default:
+            std::cerr << "oops, bad command line argument." << std::endl;
+            exit(EXIT_FAILURE);
+        }
     }
-    while (fread(&glyph, sizeof(glyph), 1, stdin) == 1) {
+
+    std::string filename = source + ".bin";
+    FILE* blob = fopen(filename.c_str(), "rb");
+    if (blob == nullptr) {
+        perror(filename.c_str());
+        exit(EXIT_FAILURE);
+    }
+    filename = source + ".map";
+    FILE* map = fopen(filename.c_str(), "rt");
+
+    Glyph glyph;
+    while (fread(&glyph, sizeof(glyph), 1, blob) == 1) {
         glyph.hflip();
-        std::string metadata;
-        if (mapping.is_open()) {
-            getline(mapping, metadata);
-            std::cout << metadata << std::endl;
+        if (map != nullptr) {
+            char metadata[1024];
+            fgets(metadata, sizeof(metadata), map);
             if (metadata[0] == 'U' && metadata[1] == '+') {
-                code = strtoull(metadata.c_str() + 2, nullptr, 16);
+                code = strtoull(metadata + 2, nullptr, 16);
             } else {
                 code = 0;
             }
-        } else {
-            std::cout << std::endl;
-        }
-        std::string output;
-        bool more = true;
-        for (int row = 0; more == true; ++row) {
-            output.clear();
-            more = false;
-            more |= braille.decode(output, glyph, row);
-            output += "  ";
-            more |= block.decode(output, glyph, row);
-            output += "  ";
-            more |= braille6.decode(output, glyph, row);
-            output += "  ";
-            more |= block6.decode(output, glyph, row);
-            output += "  ";
-            more |= braille4.decode(output, glyph, row);
-            output += "  ";
-            more |= block4.decode(output, glyph, row);
-            output += "  ";
-            more |= block2.decode(output, glyph, row);
-            std::cout << output << std::endl;
         }
         if (code > 0) {
-            for (auto set : sets) {
+            for (auto set : allsets) {
                 set->insert(code, glyph);
             }
+        } else {
+            std::string output;
+            bool more = true;
+            for (int row = 0; more == true; ++row) {
+                more = false;
+                for (auto set : allsets) {
+                    more |= set->decode(output, glyph, row);
+                    output += "  ";
+                }
+                if (more) output += '\n';
+            }
+            std::cout << "No mapping for:\n" << output << std::endl;
         }
         code++;
     }
-    for (auto set : sets) {
-        std::cout << "tlf2a$ " << set->get_rows() << " " << set->get_rows() << " 40 -1 1 0 0 0\ngenerated by 8bitfont" << std::endl;
-        for (Codepoint code = 32; code < 127; ++code) {
-            std::cout << set->get(code);
+    for (auto set : allsets) {
+        filename = source + "_" + set->name_ + ".tlf";
+        FILE* font = fopen(filename.c_str(), "wt");
+        if (font == nullptr) {
+            perror(filename.c_str());
+            continue;
         }
-        std::cout << set->get(0x00C4);  // A umlaut
-        std::cout << set->get(0x00D6);  // O umlaut
-        std::cout << set->get(0x00DC);  // U umlaut
-        std::cout << set->get(0x00E4);  // a umlaut
-        std::cout << set->get(0x00F6);  // o umlaut
-        std::cout << set->get(0x00FC);  // u umlaut
-        std::cout << set->get(0x00DF);  // sharp s
+        fprintf(font, "tlf2a$ %d %d 40 -1 1 0 0 0\n"
+                      "# %s %s generated by %s\n",
+                      set->get_rows(), set->get_rows(), source.c_str(), set->name_.c_str(), argv[0]);
+
+        for (Codepoint code = 32; code < 127; ++code) {
+            auto s = set->get(code);
+            fwrite(s.data(), 1, s.size(), font);
+        }
+        for (Codepoint code : { 0x00C4, 0x00D6, 0x00DC, 0x00E4, 0x00F6, 0x00FC, 0x00DF, }) {
+            auto s = set->get(code);
+            fwrite(s.data(), 1, s.size(), font);
+        }
+
         for (auto it : *set) {
             if (it.first < 127 || it.first == 0x00C4 || it.first == 0x00D6 || it.first == 0x00DC
                  || it.first == 0x00E4 || it.first == 0x00F6 || it.first == 0x00FC || it.first == 0x00DF) {
                 continue;
             }
-            std::cout << "0x" << std::hex << it.first << std::dec << "\n" << it.second;
+            fprintf(font, "0x%06x\n%.*s", it.first, int(it.second.size()), it.second.data());
         }
+        fclose(font);
     }
+    if (blob != nullptr) fclose(blob);
+    if (map != nullptr) fclose(map);
     return 0;
 }
