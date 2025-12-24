@@ -463,6 +463,7 @@ int main(int argc, char** argv) {
                 fwrite(s.data(), 1, s.size(), font);
             }
             for (wchar_t code : L"ÄÖÜäöüß") {
+                if (code == L'\0') continue;
                 auto s = set->get(code);
                 fwrite(s.data(), 1, s.size(), font);
             }
