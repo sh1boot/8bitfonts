@@ -1,9 +1,8 @@
-```
  ▄█▀▀█▄ ▀██        ▀▀     ██      ▄█▀█▄                   ██    
  ▀█▄▄█▀  ██▀▀█▄   ▀██    ▀██▀▀   ▄██▄    ▄█▀▀█▄ ▀█▄▀▀█▄  ▀██▀▀  
  ██  ██  ██  ██    ██     ██ ▄▄   ██     ██  ██  ██  ██   ██ ▄▄ 
   ▀▀▀▀  ▀▀ ▀▀▀    ▀▀▀▀     ▀▀▀   ▀▀▀▀     ▀▀▀▀   ▀▀  ▀▀    ▀▀▀  
-```
+
 ## 8-bit character generator ROM to TLF converter
 
 Reads various ROM dumps of 8-bit bitmap fonts and writes out files
@@ -45,8 +44,9 @@ $ toilet -f example2dot "Hello world!"
 Whether or not you can see anything meaningful from the output of
 `toilet` depends on your fonts.  `2dot` is widely supported because it
 uses the Unicode Braille characters.  But this usually leaves an obvious
-line through the middle.  `4` uses mostly [Block Elements][] characters,
-which are widely supported, but it takes up a lot of screen space.
+line through the middle.  `4wide` uses mostly [Block Elements][]
+characters, which are widely supported, but it takes up a lot of screen
+space.
 
 The others dip into [Legacy Computing][] and [Legacy Computing
 Supplement][] and get a bit messed up if the font doesn't support this.
