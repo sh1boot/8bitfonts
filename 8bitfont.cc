@@ -455,8 +455,8 @@ int main(int argc, char** argv) {
                 continue;
             }
             fprintf(font, "tlf2a$ %d %d 40 -1 1 0 0 0\n"
-                          "#%s\n",
-                          set->get_rows(glyph), set->get_rows(glyph), cmdline.c_str());
+                          "# %s:%s\n",
+                          set->get_rows(glyph), set->get_rows(glyph), set->name_.c_str(), cmdline.c_str());
 
             for (wchar_t code = 32; code < 127; ++code) {
                 auto s = set->get(code);
