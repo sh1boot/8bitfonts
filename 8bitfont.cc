@@ -110,16 +110,18 @@ struct Glyph {
         if (hflip_) hflip();
         return position;
     }
-    template <size_t H>
-    uint64_t get_bitmap(int row = 0, int stride = 8) const {
-        uint64_t r = 0;
-        for (int i = 0, s = 0; i < H; ++i, s += stride) {
-            int j = i + row;
+    template <size_t W, size_t H>
+    uint64_t get_bitmap(int line, int col) const {
+        constexpr uint64_t mask = ~(~uint64_t(1) << (W - 1));
+        uint64_t bitmap = 0;
+        for (int i = 0, s = 0; i < H; ++i, s += W) {
+            int j = i + line;
             if (0 <= j && j < height_) {
-                r |= uint64_t(blob_[j]) << s;
+                uint64_t b = uint64_t(blob_[j]) << 8 >> (col + 8);
+                bitmap |= (b & mask) << s;
             }
         }
-        return r;
+        return bitmap;
     }
     void hflip() {
         for (int i = 0; i < height_; ++i) {
@@ -143,16 +145,12 @@ struct Patcher {
     constexpr Patcher(char const* s, wchar_t code) : code_(code) {
         mask_ = 0;
         test_ = 0;
+        uint64_t b = 1;
         while (*s) {
-            mask_ = (mask_ << 1) | (*s == ' ' || *s == '#');
-            test_ = (test_ << 1) | (*s == '#');
+            mask_ |= (*s == ' ' || *s == '@') ? b : 0;
+            test_ |= (*s == '@') ? b : 0;
+            b <<= 1;
             s++;
-        }
-    }
-
-    bool decode(std::string& out, uint64_t bitmap) {
-        if ((bitmap & mask_) == test_) {
-            out += code_;
         }
     }
 
@@ -162,38 +160,41 @@ struct Patcher {
 
 template <size_t W, size_t H>
 struct Decoder {
-    constexpr Decoder(wchar_t const* ptr) {
+    static constexpr size_t PW = W + 2;
+    static constexpr size_t PH = H + 2;
+    using PatchType = Patcher<PW, PH>;
+    constexpr Decoder(wchar_t const* ptr, std::span<const PatchType> patches = std::span<const PatchType>{})
+            : patches_(patches) {
         for (WeeString& g : glyphs_) {
             assert(*ptr != '\0');
             g = *ptr++;
         }
-    }
-
-    void decode(std::string& out, uint64_t bitmap, int width) const {
-        for (int x = 0; x < width; x += W) {
-            int j = 0;
-            uint64_t mask = kRowMask;
-            int shift = 0;
-            for (int y = 0; y < H; ++y) {
-                j |= (bitmap >> shift) & mask;
-                mask <<= W;
-                shift += 8 - W;
-            }
-            bitmap >>= W;
-            assert(0 <= j && j < kMapSize);
-            out += glyphs_[j];
-        }
+        assert(*ptr == '\0');
     }
 
     bool decode(std::string& out, auto const& glyph, int row = 0) const {
-        decode(out, glyph.template get_bitmap<H>(row * H), glyph.width_);
+        for (int col = 0; col < glyph.width_; col += W) {
+            uint64_t bitmap = glyph.template get_bitmap<PW, PH>(row * H - 1, col - 1);
+            bool match = false;
+            for (auto p : patches_) {
+                if ((bitmap & p.mask_) == p.test_) {
+                    out += p.code_;
+                    match = true;
+                    break;
+                }
+            }
+            if (match) continue;
+            int j = glyph.template get_bitmap<W, H>(row * H, col);
+            assert(0 <= j && j < kMapSize);
+            out += glyphs_[j];
+        }
         return (row + 1) * H < glyph.height_;
     }
 
   private:
-    static constexpr uint64_t kRowMask = ~(~uint64_t(1) << (W - 1));
     static constexpr size_t kMapSize = size_t(1) << (W * H);
     WeeString glyphs_[kMapSize];
+    std::span<const PatchType> patches_{};
 };
 
 struct CharSetBase {
@@ -218,12 +219,8 @@ struct CharSetBase {
 
 template <int W, int H>
 struct CharSet : public CharSetBase {
-    using PatchType = Patcher<W + 2, H + 2>;
     CharSet(std::string_view name, Decoder<W, H> const& decoder)
         : CharSetBase(name), decoder_(decoder) { }
-    CharSet(std::string_view name, Decoder<W, H> const& decoder,
-            std::span<const PatchType> patches)
-        : CharSetBase(name), decoder_(decoder), patches_(patches) { }
 
     void insert(wchar_t code, Glyph const& glyph, bool replace) override {
         if (replace == false && chars_.count(code)) return;
@@ -240,7 +237,6 @@ struct CharSet : public CharSetBase {
     int get_rows(Glyph const& glyph) override { return (glyph.height_ - 1) / H + 1; }
 
     Decoder<W, H> const& decoder_;
-    std::span<const PatchType> patches_{};
 };
 
 
@@ -301,19 +297,27 @@ static constexpr wchar_t block4_data[] =
 static constexpr wchar_t block2_data[] =
    L" ▀▄█";
 
-static constexpr std::array block2_patch_data{
-    Patcher<3,4>{ "@.."
-                  "@ ."
-                  ". ."
-                  "...", L'▒' },
-    Patcher<3,4>{ "@.."
-                  "  ."
-                  ". ."
-                  "...", L'🮎' },
-    Patcher<3,4>{ "..."
-                  "@@."
-                  ". ."
-                  "...", L'🮑' },
+static constexpr Patcher<3,4> block2_shadow_data[]{
+    { "@.."
+      "@ ."
+      ". ."
+      "...", L'▒' },
+    { "@.."
+      "  ."
+      ". ."
+      "...", L'🮎' },
+    { " .."
+      "@ ."
+      ". ."
+      "...", L'🮏' },
+    { "..."
+      "@@."
+      ". ."
+      "...", L'🮑' },
+    { "@.."
+      ". ."
+      ".@."
+      "...", L'🮒' },
 };
 
 const Decoder<2,4> braille(braille_data);
@@ -323,6 +327,7 @@ const Decoder<2,4> block(block_data);
 const Decoder<2,3> block6(block6_data);
 const Decoder<2,2> block4(block4_data);
 const Decoder<1,2> block2(block2_data);
+const Decoder<1,2> block2shadow(block2_data, block2_shadow_data);
 
 CharSet<2,4> dots2x4("2x4dot", braille);
 CharSet<2,3> dots2x3("2x3dot", braille6);
@@ -330,7 +335,8 @@ CharSet<2,2> dots2x2("2x2dot", braille4);
 CharSet<2,4> blocks2x4("2x4block", block);
 CharSet<2,3> blocks2x3("2x3block", block6);
 CharSet<2,2> blocks2x2("2x2block", block4);
-CharSet<1,2> blocks1x2("1x2block", block2, block2_patch_data);
+CharSet<1,2> blocks1x2("1x2block", block2);
+CharSet<1,2> blocks1x2shadow("1x2shadow", block2shadow);
 
 CharSetBase* allsets[] = {
     &dots2x4,
@@ -340,6 +346,7 @@ CharSetBase* allsets[] = {
     &blocks2x3,
     &blocks2x2,
     &blocks1x2,
+    &blocks1x2shadow,
 };
 
 int main(int argc, char** argv) {
@@ -433,6 +440,11 @@ int main(int argc, char** argv) {
         code++;
     }
     if (!view) {
+        std::string cmdline;
+        for (int i = 0; i < argc; ++i) {
+            cmdline += " ";
+            cmdline += argv[i];
+        }
         for (auto set : allsets) {
             auto filename = output;
             filename.replace_filename(std::string(output.filename()) + "_" + set->name_);
@@ -443,8 +455,8 @@ int main(int argc, char** argv) {
                 continue;
             }
             fprintf(font, "tlf2a$ %d %d 40 -1 1 0 0 0\n"
-                          "# %s %s generated by %s\n",
-                          set->get_rows(glyph), set->get_rows(glyph), base.c_str(), set->name_.c_str(), argv[0]);
+                          "#%s\n",
+                          set->get_rows(glyph), set->get_rows(glyph), cmdline.c_str());
 
             for (wchar_t code = 32; code < 127; ++code) {
                 auto s = set->get(code);
