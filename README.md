@@ -1,3 +1,9 @@
+```
+ ▄█▀▀█▄ ▀██        ▀▀     ██      ▄█▀█▄                   ██    
+ ▀█▄▄█▀  ██▀▀█▄   ▀██    ▀██▀▀   ▄██▄    ▄█▀▀█▄ ▀█▄▀▀█▄  ▀██▀▀  
+ ██  ██  ██  ██    ██     ██ ▄▄   ██     ██  ██  ██  ██   ██ ▄▄ 
+  ▀▀▀▀  ▀▀ ▀▀▀    ▀▀▀▀     ▀▀▀   ▀▀▀▀     ▀▀▀▀   ▀▀  ▀▀    ▀▀▀  
+```
 ## 8-bit character generator ROM to TLF converter
 
 Reads various ROM dumps of 8-bit bitmap fonts and writes out files
@@ -29,7 +35,9 @@ files.  To use these, you'll need the `toilet` utility installed, and
 then you can render some text with:
 
 ```sh
-toilet -f example2dot "Hello world!"
+$ toilet -f example2dot "Hello world!"
+⢸⣇⣸⡇⢀⡤⢤⡀⠀⢲⡆⠀⠀⢲⡆⠀⢀⡤⢤⡀⠀⠀⠀⠀⢠⡄⡀⣤⢀⡤⢤⡀⢠⡤⢤⡀⠀⢲⡆⠀⠀⣀⣰⡆⠀⢸⡇⠀
+⠸⠇⠸⠇⠘⠯⠭⠁⠀⠼⠧⠀⠀⠼⠧⠀⠘⠧⠼⠃⠀⠀⠀⠀⠈⠿⠻⠏⠘⠧⠼⠃⠸⠇⠀⠀⠀⠼⠧⠀⠘⠧⠼⠇⠀⠠⠄⠀
 ```
 
 ## Compatibility
