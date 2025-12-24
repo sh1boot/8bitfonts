@@ -447,7 +447,7 @@ int main(int argc, char** argv) {
         }
         for (auto set : allsets) {
             auto filename = output;
-            filename.replace_filename(std::string(output.filename()) + set->name_);
+            filename.replace_filename(std::string(output.filename()) + "-" + set->name_);
             filename.replace_extension(".tlf");
             FILE* font = fopen(filename.c_str(), "wt");
             if (font == nullptr) {
