@@ -4,11 +4,13 @@
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
+#include <array>
 #include <filesystem>
 #include <iostream>
 #include <iomanip>
 #include <map>
 #include <string>
+#include <span>
 #include <vector>
 
 /*
@@ -50,7 +52,48 @@
 */
 
 
-using Codepoint = uint32_t;
+struct WeeString {
+    static constexpr int kMaxLen = 6;
+    constexpr WeeString() : data_{}, len_{0} {}
+    constexpr WeeString(wchar_t c) : data_{} {
+        if (c < 0x80) {
+            data_[0] = c;
+            data_[1] = '\0';
+            len_ = 1;
+        } else if (c < 0x800) {
+            data_[0] = 0xc0 | (c >> 6);
+            data_[1] = 0x80 | ((c >> 0) & 0x3f);
+            data_[2] = '\0';
+            len_ = 2;
+        } else if (c < 0x10000) {
+            data_[0] = 0xe0 | (c >> 12);
+            data_[1] = 0x80 | ((c >> 6) & 0x3f);
+            data_[2] = 0x80 | ((c >> 0) & 0x3f);
+            data_[3] = '\0';
+            len_ = 3;
+        } else {
+            data_[0] = 0xf0 | (c >> 18);
+            data_[1] = 0x80 | ((c >> 12) & 0x3f);
+            data_[2] = 0x80 | ((c >> 6) & 0x3f);
+            data_[3] = 0x80 | ((c >> 0) & 0x3f);
+            data_[4] = '\0';
+            len_ = 4;
+        }
+    }
+
+    operator char const*() const {
+        return data_;
+    }
+    operator std::string_view() const {
+        std::string_view r{data_, len_};
+        std::cerr << r << std::endl;
+        return r;
+    }
+
+  private:
+    char data_[kMaxLen];
+    uint16_t len_;
+};
 
 struct Glyph {
     static constexpr int kMaxWidth = 8;
@@ -96,41 +139,49 @@ struct Glyph {
 };
 
 template <size_t W, size_t H>
-struct Decoder {
-    Decoder(char const* ptr) {
-        while (*ptr != '\0') {
-            uint8_t byte = *ptr;
-            if (!is_ext_byte(byte)) {
-                glyphs_.push_back(ptr);
-            }
-            ptr++;
+struct Patcher {
+    constexpr Patcher(char const* s, wchar_t code) : code_(code) {
+        mask_ = 0;
+        test_ = 0;
+        while (*s) {
+            mask_ = (mask_ << 1) | (*s == ' ' || *s == '#');
+            test_ = (test_ << 1) | (*s == '#');
+            s++;
         }
-        context_height_ = 0;
-        int context_size;
-        // TODO: determine context_width_;
-        do {
-            context_height_++;
-            context_size = context_width_ * context_height_;
-        } while ((glyphs_.size() >> context_size) > 1);
-        context_mask_ = ~(~uint64_t(1) << (context_width_ - 1));
+    }
+
+    bool decode(std::string& out, uint64_t bitmap) {
+        if ((bitmap & mask_) == test_) {
+            out += code_;
+        }
+    }
+
+    uint64_t mask_, test_;
+    WeeString code_;
+};
+
+template <size_t W, size_t H>
+struct Decoder {
+    constexpr Decoder(wchar_t const* ptr) {
+        for (WeeString& g : glyphs_) {
+            assert(*ptr != '\0');
+            g = *ptr++;
+        }
     }
 
     void decode(std::string& out, uint64_t bitmap, int width) const {
         for (int x = 0; x < width; x += W) {
             int j = 0;
-            uint64_t mask = context_mask_;
+            uint64_t mask = kRowMask;
             int shift = 0;
-            for (int y = 0; y < context_height_; ++y) {
+            for (int y = 0; y < H; ++y) {
                 j |= (bitmap >> shift) & mask;
-                mask <<= context_width_;
-                shift += 8 - context_width_;
+                mask <<= W;
+                shift += 8 - W;
             }
             bitmap >>= W;
-            assert(0 <= j && j < int(glyphs_.size()));
-            char const* ptr = glyphs_[j];
-            do {
-                out.push_back(*ptr++);
-            } while (is_ext_byte(*ptr));
+            assert(0 <= j && j < kMapSize);
+            out += glyphs_[j];
         }
     }
 
@@ -139,27 +190,22 @@ struct Decoder {
         return (row + 1) * H < glyph.height_;
     }
 
-    static bool is_ext_byte(uint8_t c) {
-        return (0x80 <= c && c < 0xc0);
-    }
-
   private:
-    int context_width_ = W;
-    int context_height_;
-    uint64_t context_mask_;
-    std::vector<char const*> glyphs_;
+    static constexpr uint64_t kRowMask = ~(~uint64_t(1) << (W - 1));
+    static constexpr size_t kMapSize = size_t(1) << (W * H);
+    WeeString glyphs_[kMapSize];
 };
 
 struct CharSetBase {
-    virtual void insert(Codepoint code, Glyph const& glyph, bool replace = true) = 0;
+    virtual void insert(wchar_t code, Glyph const& glyph, bool replace = true) = 0;
     virtual bool decode(std::string& out, Glyph const& glyph, int row) const = 0;
     CharSetBase(std::string_view name) : name_(name) {}
-    size_t count(Codepoint code) {
+    size_t count(wchar_t code) {
         return chars_.count(code);
     }
     virtual int get_rows(Glyph const& glyph) = 0;
 
-    std::string_view get(Codepoint code) {
+    std::string_view get(wchar_t code) {
         if (count(code) == 0) return chars_[' '];
         return chars_[code];
     }
@@ -167,15 +213,19 @@ struct CharSetBase {
     auto end() { return chars_.end(); }
 
     std::string const name_;
-    std::map<Codepoint, std::string> chars_;
+    std::map<wchar_t, std::string> chars_;
 };
 
 template <int W, int H>
 struct CharSet : public CharSetBase {
+    using PatchType = Patcher<W + 2, H + 2>;
     CharSet(std::string_view name, Decoder<W, H> const& decoder)
         : CharSetBase(name), decoder_(decoder) { }
+    CharSet(std::string_view name, Decoder<W, H> const& decoder,
+            std::span<const PatchType> patches)
+        : CharSetBase(name), decoder_(decoder), patches_(patches) { }
 
-    void insert(Codepoint code, Glyph const& glyph, bool replace) override {
+    void insert(wchar_t code, Glyph const& glyph, bool replace) override {
         if (replace == false && chars_.count(code)) return;
         std::string image;
         for (int row = 0; decoder_.decode(image, glyph, row); ++row) {
@@ -190,11 +240,12 @@ struct CharSet : public CharSetBase {
     int get_rows(Glyph const& glyph) override { return (glyph.height_ - 1) / H + 1; }
 
     Decoder<W, H> const& decoder_;
+    std::span<const PatchType> patches_{};
 };
 
 
-static constexpr char braille_data[] =
-    "⠀⠁⠈⠉⠂⠃⠊⠋⠐⠑⠘⠙⠒⠓⠚⠛"
+static constexpr wchar_t braille_data[] =
+   L"⠀⠁⠈⠉⠂⠃⠊⠋⠐⠑⠘⠙⠒⠓⠚⠛"
     "⠄⠅⠌⠍⠆⠇⠎⠏⠔⠕⠜⠝⠖⠗⠞⠟"
     "⠠⠡⠨⠩⠢⠣⠪⠫⠰⠱⠸⠹⠲⠳⠺⠻"
     "⠤⠥⠬⠭⠦⠧⠮⠯⠴⠵⠼⠽⠶⠷⠾⠿"
@@ -211,17 +262,17 @@ static constexpr char braille_data[] =
     "⣠⣡⣨⣩⣢⣣⣪⣫⣰⣱⣸⣹⣲⣳⣺⣻"
     "⣤⣥⣬⣭⣦⣧⣮⣯⣴⣵⣼⣽⣶⣷⣾⣿";
 
-static constexpr char braille6_data[] =
-    " 𜹑𜹒𜹓𜹔𜹕𜹖𜹗𜹘𜹙𜹚𜹛𜹜𜹝𜹞𜹟"
+static constexpr wchar_t braille6_data[] =
+   L" 𜹑𜹒𜹓𜹔𜹕𜹖𜹗𜹘𜹙𜹚𜹛𜹜𜹝𜹞𜹟"
     "𜹠𜹡𜹢𜹣𜹤𜹥𜹦𜹧𜹨𜹩𜹪𜹫𜹬𜹭𜹮𜹯"
     "𜹰𜹱𜹲𜹳𜹴𜹵𜹶𜹷𜹸𜹹𜹺𜹻𜹼𜹽𜹾𜹿"
     "𜺀𜺁𜺂𜺃𜺄𜺅𜺆𜺇𜺈𜺉𜺊𜺋𜺌𜺍𜺎𜺏";
 
-static constexpr char braille4_data[] =
-    " 𜰡𜰢𜰣𜰤𜰥𜰦𜰧𜰨𜰩𜰪𜰫𜰬𜰭𜰮𜰯";
+static constexpr wchar_t braille4_data[] =
+   L" 𜰡𜰢𜰣𜰤𜰥𜰦𜰧𜰨𜰩𜰪𜰫𜰬𜰭𜰮𜰯";
 
-static constexpr char block_data[] =
-    " 𜺨𜺫🮂𜴀▘𜴁𜴂𜴃𜴄▝𜴅𜴆𜴇𜴈▀"
+static constexpr wchar_t block_data[] =
+   L" 𜺨𜺫🮂𜴀▘𜴁𜴂𜴃𜴄▝𜴅𜴆𜴇𜴈▀"
     "𜴉𜴊𜴋𜴌🯦𜴍𜴎𜴏𜴐𜴑𜴒𜴓𜴔𜴕𜴖𜴗"
     "𜴘𜴙𜴚𜴛𜴜𜴝𜴞𜴟🯧𜴠𜴡𜴢𜴣𜴤𜴥𜴦"
     "𜴧𜴨𜴩𜴪𜴫𜴬𜴭𜴮𜴯𜴰𜴱𜴲𜴳𜴴𜴵🮅"
@@ -238,17 +289,32 @@ static constexpr char block_data[] =
     "𜷋𜷌𜷍𜷎𜷏𜷐𜷑𜷒𜷓𜷔𜷕𜷖𜷗𜷘𜷙𜷚"
     "▄𜷛𜷜𜷝𜷞▙𜷟𜷠𜷡𜷢▟𜷣▆𜷤𜷥█";
 
-static constexpr char block6_data[] =
-    " 🬀🬁🬂🬃🬄🬅🬆🬇🬈🬉🬊🬋🬌🬍🬎"
+static constexpr wchar_t block6_data[] =
+   L" 🬀🬁🬂🬃🬄🬅🬆🬇🬈🬉🬊🬋🬌🬍🬎"
     "🬏🬐🬑🬒🬓▌🬔🬕🬖🬗🬘🬙🬚🬛🬜🬝"
     "🬞🬟🬠🬡🬢🬣🬤🬥🬦🬧▐🬨🬩🬪🬫🬬"
     "🬭🬮🬯🬰🬱🬲🬳🬴🬵🬶🬷🬸🬹🬺🬻█";
 
-static constexpr char block4_data[] =
-    " ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█";
+static constexpr wchar_t block4_data[] =
+   L" ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█";
 
-static constexpr char block2_data[] =
-    " ▀▄█";
+static constexpr wchar_t block2_data[] =
+   L" ▀▄█";
+
+static constexpr std::array block2_patch_data{
+    Patcher<3,4>{ "@.."
+                  "@ ."
+                  ". ."
+                  "...", L'▒' },
+    Patcher<3,4>{ "@.."
+                  "  ."
+                  ". ."
+                  "...", L'🮎' },
+    Patcher<3,4>{ "..."
+                  "@@."
+                  ". ."
+                  "...", L'🮑' },
+};
 
 const Decoder<2,4> braille(braille_data);
 const Decoder<2,3> braille6(braille6_data);
@@ -264,7 +330,7 @@ CharSet<2,2> dots2x2("2x2dot", braille4);
 CharSet<2,4> blocks2x4("2x4block", block);
 CharSet<2,3> blocks2x3("2x3block", block6);
 CharSet<2,2> blocks2x2("2x2block", block4);
-CharSet<1,2> blocks1x2("1x2block", block2);
+CharSet<1,2> blocks1x2("1x2block", block2, block2_patch_data);
 
 CharSetBase* allsets[] = {
     &dots2x4,
@@ -335,7 +401,7 @@ int main(int argc, char** argv) {
     FILE* map = fopen(mapfile.c_str(), "rt");
 
     Glyph glyph(height, width, flip, shift);
-    Codepoint code = 32;
+    wchar_t code = 32;
     long position;
     while ((position = glyph.read(blob)) >= 0) {
         if (map != nullptr) {
@@ -380,18 +446,17 @@ int main(int argc, char** argv) {
                           "# %s %s generated by %s\n",
                           set->get_rows(glyph), set->get_rows(glyph), base.c_str(), set->name_.c_str(), argv[0]);
 
-            for (Codepoint code = 32; code < 127; ++code) {
+            for (wchar_t code = 32; code < 127; ++code) {
                 auto s = set->get(code);
                 fwrite(s.data(), 1, s.size(), font);
             }
-            for (Codepoint code : { 0x00C4, 0x00D6, 0x00DC, 0x00E4, 0x00F6, 0x00FC, 0x00DF, }) {
+            for (wchar_t code : L"ÄÖÜäöüß") {
                 auto s = set->get(code);
                 fwrite(s.data(), 1, s.size(), font);
             }
 
             for (auto it : *set) {
-                if (it.first < 127 || it.first == 0x00C4 || it.first == 0x00D6 || it.first == 0x00DC
-                     || it.first == 0x00E4 || it.first == 0x00F6 || it.first == 0x00FC || it.first == 0x00DF) {
+                if (it.first < 127 || wcschr(L"ÄÖÜäöüß", it.first)) {
                     continue;
                 }
                 fprintf(font, "0x%06x\n%.*s", it.first, int(it.second.size()), it.second.data());
