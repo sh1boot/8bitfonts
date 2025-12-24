@@ -53,7 +53,7 @@
 
 
 struct WeeString {
-    static constexpr int kMaxLen = 6;
+    static constexpr int kMaxLen = 7;
     constexpr WeeString() : data_{}, len_{0} {}
     constexpr WeeString(wchar_t c) : data_{} {
         if (c < 0x80) {
@@ -92,7 +92,7 @@ struct WeeString {
 
   private:
     char data_[kMaxLen];
-    uint16_t len_;
+    uint8_t len_;
 };
 
 struct Glyph {
@@ -329,14 +329,14 @@ const Decoder<2,2> block4(block4_data);
 const Decoder<1,2> block2(block2_data);
 const Decoder<1,2> block2shadow(block2_data, block2_shadow_data);
 
-CharSet<2,4> dots2x4("2x4dot", braille);
-CharSet<2,3> dots2x3("2x3dot", braille6);
-CharSet<2,2> dots2x2("2x2dot", braille4);
-CharSet<2,4> blocks2x4("2x4block", block);
-CharSet<2,3> blocks2x3("2x3block", block6);
-CharSet<2,2> blocks2x2("2x2block", block4);
-CharSet<1,2> blocks1x2("1x2block", block2);
-CharSet<1,2> blocks1x2shadow("1x2shadow", block2shadow);
+CharSet<2,4> dots2x4("2dot", braille);
+CharSet<2,3> dots2x3("3dot", braille6);
+CharSet<2,2> dots2x2("4dot", braille4);
+CharSet<2,4> blocks2x4("2", block);
+CharSet<2,3> blocks2x3("3", block6);
+CharSet<2,2> blocks2x2("4", block4);
+CharSet<1,2> blocks1x2("4wide", block2);
+CharSet<1,2> blocks1x2shadow("4shadow", block2shadow);
 
 CharSetBase* allsets[] = {
     &dots2x4,
@@ -447,7 +447,7 @@ int main(int argc, char** argv) {
         }
         for (auto set : allsets) {
             auto filename = output;
-            filename.replace_filename(std::string(output.filename()) + "_" + set->name_);
+            filename.replace_filename(std::string(output.filename()) + set->name_);
             filename.replace_extension(".tlf");
             FILE* font = fopen(filename.c_str(), "wt");
             if (font == nullptr) {
@@ -455,8 +455,8 @@ int main(int argc, char** argv) {
                 continue;
             }
             fprintf(font, "tlf2a$ %d %d 40 -1 1 0 0 0\n"
-                          "# %s:%s\n",
-                          set->get_rows(glyph), set->get_rows(glyph), set->name_.c_str(), cmdline.c_str());
+                          "#%s (set: %s)\n",
+                          set->get_rows(glyph), set->get_rows(glyph), cmdline.c_str(), set->name_.c_str());
 
             for (wchar_t code = 32; code < 127; ++code) {
                 auto s = set->get(code);
