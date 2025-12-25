@@ -14,11 +14,14 @@
 #include <vector>
 
 /*
-░─░━░│░┃░┄░┅░┆░┇░┈░┉░┊░┋░┌░┍░┎░┏░┐░┑░┒░┓░└░┕░┖░┗░┘░┙░┚░┛░├░┝░┞░┟░░
-░░┠░┡░┢░┣░┤░┥░┦░┧░┨░┩░┪░┫░┬░┭░┮░┯░┰░┱░┲░┳░┴░┵░┶░┷░┸░┹░┺░┻░┼░┽░┾░┿░
-░╀░╁░╂░╃░╄░╅░╆░╇░╈░╉░╊░╋░╌░╍░╎░╏░═░║░╒░╓░╔░╕░╖░╗░╘░╙░╚░╛░╜░╝░╞░╟░░
-░░╠░╡░╢░╣░╤░╥░╦░╧░╨░╩░╪░╫░╬░╭░╮░╯░╰░╱░╲░╳░╴░╵░╶░╷░╸░╹░╺░╻░╼░╽░╾░╿░
-░▀░▁░▂░▃░▄░▅░▆░▇░█░▉░▊░▋░▌░▍░▎░▏░▐░░░▒░▓░▔░▕░▖░▗░▘░▙░▚░▛░▜░▝░▞░▟░░
+░░─░━░│░┃░┄░┅░┆░┇░┈░┉░┊░┋░┌░┍░┎░┏░┐░┑░┒░┓░└░┕░┖░┗░┘░┙░┚░┛░├░┝░┞░┟░
+░┠░┡░┢░┣░┤░┥░┦░┧░┨░┩░┪░┫░┬░┭░┮░┯░┰░┱░┲░┳░┴░┵░┶░┷░┸░┹░┺░┻░┼░┽░┾░┿░░
+░░╀░╁░╂░╃░╄░╅░╆░╇░╈░╉░╊░╋░╌░╍░╎░╏░═░║░╒░╓░╔░╕░╖░╗░╘░╙░╚░╛░╜░╝░╞░╟░
+░╠░╡░╢░╣░╤░╥░╦░╧░╨░╩░╪░╫░╬░╭░╮░╯░╰░╱░╲░╳░╴░╵░╶░╷░╸░╹░╺░╻░╼░╽░╾░╿░░
+░░▀░▁░▂░▃░▄░▅░▆░▇░█░▉░▊░▋░▌░▍░▎░▏░▐░░░▒░▓░▔░▕░▖░▗░▘░▙░▚░▛░▜░▝░▞░▟░
+░■░□░▢░▣░▤░▥░▦░▧░▨░▩░▪░▫░▬░▭░▮░▯░▰░▱░▲░△░▴░▵░▶░▷░▸░▹░►░▻░▼░▽░▾░▿░░
+░░◀░◁░◂░◃░◄░◅░◆░◇░◈░◉░◊░○░◌░◍░◎░●░◐░◑░◒░◓░◔░◕░◖░◗░◘░◙░◚░◛░◜░◝░◞░◟░
+░◠░◡░◢░◣░◤░◥░◦░◧░◨░◩░◪░◫░◬░◭░◮░◯░◰░◱░◲░◳░◴░◵░◶░◷░◸░◹░◺░◻░◼░◽░◾░◿░
 ░░🬀░🬁░🬂░🬃░🬄░🬅░🬆░🬇░🬈░🬉░🬊░🬋░🬌░🬍░🬎░🬏░🬐░🬑░🬒░🬓░🬔░🬕░🬖░🬗░🬘░🬙░🬚░🬛░🬜░🬝░🬞░🬟░
 ░🬠░🬡░🬢░🬣░🬤░🬥░🬦░🬧░🬨░🬩░🬪░🬫░🬬░🬭░🬮░🬯░🬰░🬱░🬲░🬳░🬴░🬵░🬶░🬷░🬸░🬹░🬺░🬻░🬼░🬽░🬾░🬿░░
 ░░🭀░🭁░🭂░🭃░🭄░🭅░🭆░🭇░🭈░🭉░🭊░🭋░🭌░🭍░🭎░🭏░🭐░🭑░🭒░🭓░🭔░🭕░🭖░🭗░🭘░🭙░🭚░🭛░🭜░🭝░🭞░🭟░
@@ -163,18 +166,24 @@ struct Decoder {
     static constexpr size_t PW = W + 2;
     static constexpr size_t PH = H + 2;
     using PatchType = Patcher<PW, PH>;
-    constexpr Decoder(wchar_t const* ptr, std::span<const PatchType> patches = std::span<const PatchType>{})
-            : patches_(patches) {
+    static constexpr std::span<const PatchType> kNoPatches{};
+    constexpr Decoder(wchar_t const* ptr,
+                      std::span<const PatchType> patches = kNoPatches,
+                      int advx = W, int advy = H)
+            : advx_(advx), advy_(advy), patches_(patches) {
         for (WeeString& g : glyphs_) {
             assert(*ptr != '\0');
             g = *ptr++;
         }
         assert(*ptr == '\0');
     }
+    constexpr Decoder(wchar_t const* ptr,
+                      int advx, int advy = H)
+            : Decoder(ptr, kNoPatches, advx, advy) {}
 
     bool decode(std::string& out, auto const& glyph, int row = 0) const {
-        for (int col = 0; col < glyph.width_; col += W) {
-            uint64_t bitmap = glyph.template get_bitmap<PW, PH>(row * H - 1, col - 1);
+        for (int col = 0; col < glyph.width_; col += advx_) {
+            uint64_t bitmap = glyph.template get_bitmap<PW, PH>(row * advy_ - 1, col - 1);
             bool match = false;
             for (auto p : patches_) {
                 if ((bitmap & p.mask_) == p.test_) {
@@ -184,16 +193,18 @@ struct Decoder {
                 }
             }
             if (match) continue;
-            int j = glyph.template get_bitmap<W, H>(row * H, col);
+            int j = glyph.template get_bitmap<W, H>(row * advy_, col);
             assert(0 <= j && j < kMapSize);
             out += glyphs_[j];
         }
-        return (row + 1) * H < glyph.height_;
+        return (row + 1) * advy_ < glyph.height_;
     }
+    int get_rows(Glyph const& glyph) const { return (glyph.height_ - 1) / advy_ + 1; }
 
   private:
     static constexpr size_t kMapSize = size_t(1) << (W * H);
     WeeString glyphs_[kMapSize];
+    const int advx_ = W, advy_ = H;
     std::span<const PatchType> patches_{};
 };
 
@@ -204,7 +215,7 @@ struct CharSetBase {
     size_t count(wchar_t code) {
         return chars_.count(code);
     }
-    virtual int get_rows(Glyph const& glyph) = 0;
+    virtual int get_rows(Glyph const& glyph) const = 0;
 
     std::string_view get(wchar_t code) {
         if (count(code) == 0) return chars_[' '];
@@ -234,7 +245,7 @@ struct CharSet : public CharSetBase {
     bool decode(std::string& out, Glyph const& glyph, int row) const override {
         return decoder_.decode(out, glyph, row);
     }
-    int get_rows(Glyph const& glyph) override { return (glyph.height_ - 1) / H + 1; }
+    int get_rows(Glyph const& glyph) const override { return decoder_.get_rows(glyph); }
 
     Decoder<W, H> const& decoder_;
 };
@@ -291,8 +302,8 @@ static constexpr wchar_t block6_data[] =
     "🬞🬟🬠🬡🬢🬣🬤🬥🬦🬧▐🬨🬩🬪🬫🬬"
     "🬭🬮🬯🬰🬱🬲🬳🬴🬵🬶🬷🬸🬹🬺🬻█";
 
-static constexpr wchar_t block4_data[] =
-   L" ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█";
+static constexpr wchar_t block4_data[] = L" ▘▝▀▖▌▞▛▗▚▐▜▄▙▟█";
+static constexpr wchar_t edge4_data[] =  L" ┛┕━┒┃╆┏┌╃│┑─┖┘ ";
 
 static constexpr wchar_t block2_data[] =
    L" ▀▄█";
@@ -319,6 +330,24 @@ static constexpr Patcher<3,4> block2_shadow_data[]{
       ".@."
       "...", L'🮒' },
 };
+#if 0
+    { "---"
+      "-@ "
+      "@ -"
+      "---", L'🮜' },
+    { "---"
+      " @-"
+      "- @"
+      "-- ", L'🮝' },
+    { "---"
+      "@ -"
+      "-@ "
+      "---", L'🮟' },
+    { "---"
+      "- @"
+      " @-"
+      "---", L'🮞' },
+#endif
 
 const Decoder<2,4> braille(braille_data);
 const Decoder<2,3> braille6(braille6_data);
@@ -326,6 +355,7 @@ const Decoder<2,2> braille4(braille4_data);
 const Decoder<2,4> block(block_data);
 const Decoder<2,3> block6(block6_data);
 const Decoder<2,2> block4(block4_data);
+const Decoder<2,2> outline4(edge4_data, 1, 1);
 const Decoder<1,2> block2(block2_data);
 const Decoder<1,2> block2shadow(block2_data, block2_shadow_data);
 
@@ -337,6 +367,7 @@ CharSet<2,3> blocks2x3("3", block6);
 CharSet<2,2> blocks2x2("4", block4);
 CharSet<1,2> blocks1x2("4wide", block2);
 CharSet<1,2> blocks1x2shadow("4shadow", block2shadow);
+CharSet<2,2> outline2x2("8outline", outline4);
 
 CharSetBase* allsets[] = {
     &dots2x4,
@@ -347,6 +378,7 @@ CharSetBase* allsets[] = {
     &blocks2x2,
     &blocks1x2,
     &blocks1x2shadow,
+    &outline2x2,
 };
 
 int main(int argc, char** argv) {
